@@ -1,10 +1,10 @@
-// src/store/useTaskStore.ts
-import { zustandStorage } from '@/lib/storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
-export type Priority = 'low' | 'medium' | 'high';
 export type Category = 'work' | 'personal' | 'health' | 'learning';
+export type Priority = 'low' | 'medium' | 'high';
 
 export interface Task {
   id: string;
@@ -12,65 +12,63 @@ export interface Task {
   isCompleted: boolean;
   priority: Priority;
   category: Category;
-  createdAt: number; 
-  reminderTime: string | null; 
-  shouldNotify: boolean;       
+  createdAt: number;
+  reminderTime: string | null;
+  shouldNotify: boolean;
+  notificationId?: string; // Tracks the exact notification to cancel it later
 }
 
-interface TaskState {
+interface TaskStore {
   tasks: Task[];
-  userName: string | null;
-  globalNotifications: boolean; // NEW: Master switch for all alerts
+  userName: string;
   setUserName: (name: string) => void;
-  setGlobalNotifications: (enabled: boolean) => void; // NEW: Setter
-  addTask: (task: Omit<Task, 'id'>) => void; 
+  addTask: (task: Omit<Task, 'id'>) => void;
+  updateTask: (id: string, updatedData: Partial<Task>) => void;
   toggleTask: (id: string) => void;
   deleteTask: (id: string) => void;
-  getTasksByDate: (dateString: string) => Task[];
 }
 
-export const useTaskStore = create<TaskState>()(
+export const useTaskStore = create<TaskStore>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       tasks: [],
-      userName: null,
-      globalNotifications: true, // Defaults to true
-      
+      userName: '',
       setUserName: (name) => set({ userName: name }),
-      setGlobalNotifications: (enabled) => set({ globalNotifications: enabled }),
 
-      addTask: (taskData) =>
-        set((state) => ({
-          tasks: [
-            {
-              ...taskData,
-              id: Math.random().toString(36).substring(2, 15),
-            },
-            ...state.tasks,
-          ],
-        })),
+      addTask: (taskData) => set((state) => ({
+        tasks: [{ ...taskData, id: Math.random().toString(36).substring(2, 10) }, ...state.tasks]
+      })),
 
-      toggleTask: (id) =>
-        set((state) => ({
-          tasks: state.tasks.map((task) =>
-            task.id === id ? { ...task, isCompleted: !task.isCompleted } : task
-          ),
-        })),
+      updateTask: (id, updatedData) => set((state) => ({
+        tasks: state.tasks.map(t => (t.id === id ? { ...t, ...updatedData } : t))
+      })),
 
-      deleteTask: (id) =>
-        set((state) => ({
-          tasks: state.tasks.filter((task) => task.id !== id),
-        })),
+      toggleTask: (id) => set((state) => {
+        const tasks = state.tasks.map(t => {
+          if (t.id === id) {
+            // Cancel notification if the user marks it as completed early
+            if (!t.isCompleted && t.notificationId) {
+              Notifications.cancelScheduledNotificationAsync(t.notificationId).catch(() => {});
+            }
+            return { ...t, isCompleted: !t.isCompleted };
+          }
+          return t;
+        });
+        return { tasks };
+      }),
 
-      getTasksByDate: (dateString) => {
-        return get().tasks.filter(
-          (t) => new Date(t.createdAt).toDateString() === dateString
-        );
-      },
+      deleteTask: (id) => set((state) => {
+        const taskToDelete = state.tasks.find(t => t.id === id);
+        // Destroy the notification if the task is deleted
+        if (taskToDelete?.notificationId) {
+          Notifications.cancelScheduledNotificationAsync(taskToDelete.notificationId).catch(() => {});
+        }
+        return { tasks: state.tasks.filter(t => t.id !== id) };
+      }),
     }),
     {
-      name: 'lifesync-premium-tasks',
-      storage: createJSONStorage(() => zustandStorage),
+      name: 'lifesync-storage', // The unique key for local storage
+      storage: createJSONStorage(() => AsyncStorage),
     }
   )
 );
